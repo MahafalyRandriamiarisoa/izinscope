@@ -16,11 +16,8 @@ def log(msg, logfile=None):
     if logfile:
         logfile.write(msg + "\n")
 
-def resolve_domain(domain):
+def resolve_domain(domain, resolver):
     ips = set()
-    resolver = dns.resolver.Resolver()
-    resolver.timeout = 3
-    resolver.lifetime = 3
     for record in ['A', 'AAAA']:
         try:
             answers = resolver.resolve(domain, record)
@@ -96,6 +93,10 @@ def main():
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         logfile = open(f"log_izinscope_{timestamp}.log", 'w', encoding='utf-8')
 
+    resolver = dns.resolver.Resolver()
+    resolver.timeout = 3
+    resolver.lifetime = 3
+
     if args.single_check:
         single_check(args.single_check, allowed_networks, allowed_ips)
         return
@@ -105,7 +106,7 @@ def main():
 
     inscope_results = {}
     with ThreadPoolExecutor(max_workers=10) as executor:
-        results = executor.map(resolve_domain, domains)
+        results = executor.map(lambda d: resolve_domain(d, resolver), domains)
 
         for domain, ips in results:
             if not ips:
