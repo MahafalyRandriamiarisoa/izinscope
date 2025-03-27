@@ -7,7 +7,7 @@ authors = [
 ]
 license = {text = "MIT"}
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.7"
 dependencies = [
     "dnspython (>=2.7.0,<3.0.0)"
 ]
