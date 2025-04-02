@@ -52,21 +52,47 @@ def is_ip_in_scope(ip, networks, ips):
     ip_obj = ipaddress.ip_address(ip)
     return ip in ips or any(ip_obj in net for net in networks)
 
-def single_check(ip, networks, ips):
+def single_check(target, networks, ips):
     try:
-        ip_obj = ipaddress.ip_address(ip)
-    except ValueError:
-        print(f"{RED}[-]{RESET} {ip} : Adresse IP invalide")
-        sys.exit(1)
+        # Essai de résolution du domaine d'abord
+        resolved_ips = socket.gethostbyname_ex(target)[2]
+        
+        results = []
+        for ip in resolved_ips:
+            ip_obj = ipaddress.ip_address(ip)
+            matching = [str(net) for net in networks if ip_obj in net]
+            if ip in ips:
+                matching.append(f"{ip}/32")
+            if matching:
+                results.append(f"{ip} -> {', '.join(matching)}")
+        
+        if results:
+            print(f"{GREEN}[+]{RESET} {target} résout vers:")
+            for result in results:
+                # si last : └─ sinon ├─
+                if result == results[-1]:
+                    print(f" {GREEN}└─{RESET} {result}")
+                else:
+                    print(f" {GREEN}├─{RESET} {result}")
+        else:
+            print(f"{RED}[-]{RESET} {target} : toutes les IPs sont hors scope")
+            
+    except socket.gaierror:
+        # Si la résolution échoue, on essaie de traiter comme une IP
+        try:
+            ip_obj = ipaddress.ip_address(target)
+            matching = [str(net) for net in networks if ip_obj in net]
+            if target in ips:
+                matching.append(f"{target}/32")
 
-    matching = [str(net) for net in networks if ip_obj in net]
-    if ip in ips:
-        matching.append(f"{ip}/32")
-
-    if matching:
-        print(f"{GREEN}[+]{RESET} {ip} -> {', '.join(matching)}")
-    else:
-        print(f"{RED}[-]{RESET} {ip} hors scope.")
+            if matching:
+                print(f"{GREEN}[+]{RESET} {target} -> {', '.join(matching)}")
+            else:
+                print(f"{RED}[-]{RESET} {target} hors scope.")
+                
+        except ValueError:
+            print(f"{RED}[-]{RESET} {target} : Ni un domaine valide ni une IP valide")
+            sys.exit(1)
 
 def write_output(filename, data, csv=False):
     with open(filename, 'w', encoding='utf-8') as f:
