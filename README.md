@@ -11,7 +11,7 @@
 Assurez-vous d’avoir [pipx](https://pypa.github.io/pipx/) installé, puis exécutez :
 
 ```bash
-pipx install git+https://github.com/MahafalyRandriamiarisoa/izinscope.git
+pipx install izinscope
 ```
 
 Vous pouvez alors utiliser la commande `izinscope` depuis votre terminal.
