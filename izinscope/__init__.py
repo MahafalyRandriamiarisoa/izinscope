@@ -132,7 +132,7 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Mode debug (logs détaillés)")
     parser.add_argument("-oT", "--output-txt", help="Sortie txt (domaines uniquement)")
     parser.add_argument("-oC", "--output-csv", help="Sortie csv (domaine,ip,entry,file)")
-    parser.add_argument('--version', action='version', version='izinscope 0.4.0')
+    parser.add_argument("-V",'--version', action='version', version='izinscope 0.4.0')
     # stdout options for only domain --only-domain
     parser.add_argument("-od",'--only-domain', action='store_true', help="Afficher uniquement les domaines dans la sortie")
 
