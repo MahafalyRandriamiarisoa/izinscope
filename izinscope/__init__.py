@@ -108,15 +108,19 @@ def single_check(target, networks, ips_map):
 def write_output(filename, data, csv=False):
     with open(filename, 'w', encoding='utf-8') as f:
         if csv:
-            f.write("domain,ip,entry,file\n")
-            for domain, matches in data.items():
+            # Format CSV : target,entry,file  (target = IP ou domaine)
+            f.write("target,entry,file\n")
+            for _domain, matches in data.items():
                 for ip, entry, fname in matches:
-                    f.write(f"{domain},{ip},{entry},{os.path.basename(fname)}\n")
+                    # On choisit l'IP comme "target" car c'est elle qui matche réellement le scope.
+                    f.write(f"{ip},{entry},{os.path.basename(fname)}\n")
         else:
-            # On écrit le domaine unique par ligne
+            # On écrit le domaine et/ou les ips uniques par ligne
             for domain, matches in data.items():
                 ips_only = [ip for ip, _, _ in matches]
-                f.write(domain+ "\n")
+                for ip in ips_only:
+                    f.write(ip + "\n")
+                f.write(domain + "\n")
 
 
 def main():
@@ -220,7 +224,7 @@ def main():
         write_output(args.output_csv, inscope_results, csv=True)
         log(f"Fichier CSV '{args.output_csv}' créé.", logfile)
 
-    # Sortie TXT : domaines uniques
+    # Sortie TXT : "domaines/IPs uniques"
     if args.output_txt:
         write_output(args.output_txt, inscope_results, csv=False)
         log(f"Fichier TXT '{args.output_txt}' créé.", logfile)

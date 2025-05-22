@@ -1,6 +1,6 @@
 [project]
 name = "izinscope"
-version = "0.4.0"
+version = "0.4.1"
 description = "**izinscope** est un outil en ligne de commande permettant de vérifier si des adresses IP ou des domaines se trouvent dans un scope défini (IP, CIDR, domaines résolus). Il facilite l’identification des ressources “in-scope” et peut générer des rapports TXT ou CSV."
 authors = [
     {name = "Mahafaly Randriamiarisoa"}
