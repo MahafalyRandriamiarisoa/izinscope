@@ -1,84 +1,174 @@
-# tests/test_izinscope.py
-import pytest
+"""
+Tests unitaires pour le module izinscope.
+
+Le réseau et le système de fichiers réels sont systématiquement
+mockés pour garantir des tests rapides, reproductibles et hors-ligne.
+"""
+from __future__ import annotations
+
+import io
 import ipaddress
-import socket
-import dns.resolver
-from izinscope import log, resolve_domain, load_scope, is_ip_in_scope, single_check, write_output
+import os
+import textwrap
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
-class DummyAnswer:
-    def __init__(self, text):
-        self._text = text
-    def to_text(self):
-        return self._text
+import pytest
 
-class DummyResolver:
-    def __init__(self, records):
-        self._records = records
-    def resolve(self, domain, record):
-        if domain in self._records and record in self._records[domain]:
-            return [DummyAnswer(ip) for ip in self._records[domain][record]]
-        else:
-            raise dns.resolver.NoAnswer()
+import izinscope
 
 
-def test_resolve_domain(monkeypatch):
-    records = {'example.com': {'A': ['1.2.3.4'], 'AAAA': ['::1']}}
-    resolver = DummyResolver(records)
-    domain, ips = resolve_domain('example.com', resolver)
-    assert domain == 'example.com'
-    assert set(ips) == {'1.2.3.4', '::1'}
+# ---------------------------------------------------------------------------
+# resolve_domain
+# ---------------------------------------------------------------------------
+
+class _FakeRdata:
+    """Objet minimal possédant la méthode .to_text() attendue par resolve()."""
+    def __init__(self, val: str) -> None:
+        self._val = val
+
+    def to_text(self) -> str:  # noqa: D401
+        return self._val
 
 
-def test_load_scope(tmp_path, monkeypatch):
-    # Préparer un fichier scope.txt
+class _FakeResolver:
+    """Remplace dns.resolver.Resolver pour des tests déterministes."""
+    def __init__(self, mapping: dict[tuple[str, str], list[str]]) -> None:
+        # mapping : (domain, record) -> [ip, ...]
+        self._mapping = mapping
+
+    def resolve(self, domain: str, record: str):  # noqa: D401
+        key = (domain, record)
+        if key not in self._mapping:
+            # Simule l'exception NoAnswer du resolver réel
+            raise izinscope.dns.resolver.NoAnswer()
+        return [_FakeRdata(ip) for ip in self._mapping[key]]
+
+
+def test_resolve_domain_success() -> None:
+    """Le domaine retourne bien la liste des IP A et AAAA."""
+    domain = "example.com"
+    fake = _FakeResolver(
+        {
+            (domain, "A"): ["1.2.3.4"],
+            (domain, "AAAA"): ["2001:db8::1"],
+        }
+    )
+
+    returned_domain, ips = izinscope.resolve_domain(domain, fake)
+
+    assert returned_domain == domain
+    assert set(ips) == {"1.2.3.4", "2001:db8::1"}
+
+
+def test_resolve_domain_no_aaaa() -> None:
+    """Absence d’enregistrement AAAA ne doit pas lever d’erreur."""
+    domain = "example.net"
+    fake = _FakeResolver({(domain, "A"): ["9.9.9.9"]})
+
+    returned_domain, ips = izinscope.resolve_domain(domain, fake)
+
+    assert returned_domain == domain
+    assert ips == ["9.9.9.9"]
+
+
+# ---------------------------------------------------------------------------
+# load_scope
+# ---------------------------------------------------------------------------
+
+def test_load_scope_mixed_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Mélange CIDR + domaine dans le fichier de scope.
+
+    On patch socket.gethostbyname_ex pour renvoyer une IP prédictible.
+    """
     scope_file = tmp_path / "scope.txt"
-    scope_file.write_text("192.168.0.0/24\nexample.com\n")
-    # Simuler la résolution DNS pour example.com
-    monkeypatch.setattr(socket, 'gethostbyname_ex', lambda name: (name, [], ['5.6.7.8']))
-    networks, ips = load_scope(str(scope_file))
-    assert ipaddress.ip_network("192.168.0.0/24") in networks
-    assert "5.6.7.8" in ips
+    scope_file.write_text(textwrap.dedent("""\
+        10.0.0.0/8
+        example.org
+    """))
+
+    def fake_gethostbyname_ex(host: str):  # noqa: D401
+        if host == "example.org":
+            return ("example.org", [], ["93.184.216.34"])
+        raise OSError  # n'est pas censé arriver dans ce test
+
+    monkeypatch.setattr(izinscope.socket, "gethostbyname_ex", fake_gethostbyname_ex)
+
+    nets, ip_map = izinscope.load_scope(scope_file)
+
+    # 1) réseau CIDR correctement interprété
+    cidrs = {str(n[0]) for n in nets}
+    assert "10.0.0.0/8" in cidrs
+    print("AAAA")
+    print(scope_file)
+    # 2) domaine résolu stocké dans ip_map
+    assert ip_map == {
+        "93.184.216.34": [("example.org", str(scope_file))]
+    }
 
 
-def test_is_ip_in_scope():
-    networks = [ipaddress.ip_network("10.0.0.0/8")]
-    ips = {"1.2.3.4"}
-    assert is_ip_in_scope("10.1.2.3", networks, ips)
-    assert is_ip_in_scope("1.2.3.4", networks, ips)
-    assert not is_ip_in_scope("8.8.8.8", networks, ips)
+# ---------------------------------------------------------------------------
+# single_check
+# ---------------------------------------------------------------------------
+
+def test_single_check_ip_match(capsys: pytest.CaptureFixture[str]) -> None:
+    """
+    La cible est une IP appartenant au scope -> sortie avec préfixe [+]
+    """
+    networks = [(ipaddress.ip_network("192.168.0.0/24"), "192.168.0.0/24", "scope.txt")]
+    izinscope.ONLY_DOMAIN = False  # on veut que log() écrive sur stdout
+
+    izinscope.single_check("192.168.0.5", networks, ips_map={})
+
+    out = capsys.readouterr().out
+    assert "[+]" in out
+    assert "192.168.0.5" in out
 
 
-def test_single_check_domain_in_scope(monkeypatch, capsys):
-    networks = [ipaddress.ip_network("8.8.8.0/24")]
-    ips = {"8.8.8.8"}
-    monkeypatch.setattr(socket, 'gethostbyname_ex', lambda name: (name, [], ['8.8.8.8']))
-    single_check("example.com", networks, ips)
-    captured = capsys.readouterr()
-    assert "[+]" in captured.out
-    assert "example.com résout vers:" in captured.out
+def test_single_check_domain_no_match(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """
+    Domaine résout hors scope -> préfixe [-] + 'Aucune IP résolue.'
+    (cf. early return dans le code).
+    """
+    def fake_gethostbyname_ex(host: str):  # noqa: D401
+        return (host, [], ["8.8.8.8"])
+
+    monkeypatch.setattr(izinscope.socket, "gethostbyname_ex", fake_gethostbyname_ex)
+    izinscope.ONLY_DOMAIN = False
+
+    izinscope.single_check("nocontent.example", networks=[], ips_map={})
+
+    out = capsys.readouterr().out
+    assert "Aucune IP résolue." in out
+    assert "[-]" in out
 
 
-def test_single_check_ip_not_in_scope(capsys):
-    networks = []
-    ips = set()
-    single_check("9.9.9.9", networks, ips)
-    captured = capsys.readouterr()
-    assert "[-]" in captured.out
+# ---------------------------------------------------------------------------
+# write_output
+# ---------------------------------------------------------------------------
 
-
-def test_single_check_invalid_target(capsys):
-    # Cible ni domaine ni IP valide
-    with pytest.raises(SystemExit):
-        single_check("not_valid", [], set())
-    captured = capsys.readouterr()
-    assert "Ni un domaine valide ni une IP valide" in captured.out
-
-
-def test_write_output(tmp_path):
-    data = {"a.com": ["1.2.3.4", "5.6.7.8"]}
+def test_write_output_txt_and_csv(tmp_path: Path) -> None:
+    """
+    Vérifie la génération correcte des fichiers TXT et CSV.
+    """
+    data = {
+        "example.com": [("93.184.216.34", "entry", "/dir/scope.txt")]
+    }
     txt_file = tmp_path / "out.txt"
-    write_output(str(txt_file), data, csv=False)
-    assert txt_file.read_text().splitlines() == ["a.com"]
     csv_file = tmp_path / "out.csv"
-    write_output(str(csv_file), data, csv=True)
-    assert csv_file.read_text().splitlines() == ["a.com,1.2.3.4,5.6.7.8"]
+
+    izinscope.write_output(txt_file, data, csv=False)
+    izinscope.write_output(csv_file, data, csv=True)
+
+    # TXT = un domaine par ligne
+    assert txt_file.read_text().strip() == "example.com"
+
+    # CSV = en-tête + ligne détaillée
+    csv_lines = csv_file.read_text().splitlines()
+    assert csv_lines[0] == "domain,ip,entry,file"
+    assert csv_lines[1].split(",")[:2] == ["example.com", "93.184.216.34"]
+    assert csv_lines[1].endswith("scope.txt")

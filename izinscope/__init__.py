@@ -12,8 +12,11 @@ GREEN = "\033[92m"
 RED = "\033[91m"
 RESET = "\033[0m"
 
+
+
 def log(msg, logfile=None):
-    print(msg)
+    if not ONLY_DOMAIN:
+        print(msg)
     if logfile:
         logfile.write(msg + "\n")
 
@@ -35,31 +38,45 @@ def resolve_domain(domain, resolver):
 # - liste de tuples (network_obj, entry, filename)
 # - dict mapping ip -> list of (entry, filename)
 def load_scope(scope_file):
+    # Accept both `str` and `pathlib.Path` inputs.  Convert once to a plain
+    # string so that internal data structures always contain the same type
+    # (this helps comparisons in tests that expect a `str`).
+    scope_file_str = os.fspath(scope_file)
     networks = []
     ips_map = {}
-    with open(scope_file, 'r') as f:
+    with open(scope_file_str, 'r') as f:
         for line in f:
             entry = line.strip()
             if not entry:
                 continue
             try:
                 net = ipaddress.ip_network(entry, strict=False)
-                networks.append((net, entry, scope_file))
+                networks.append((net, entry, scope_file_str))
             except ValueError:
                 try:
                     resolved = socket.gethostbyname_ex(entry)[2]
                     for ip in resolved:
-                        ips_map.setdefault(ip, []).append((entry, scope_file))
+                        ips_map.setdefault(ip, []).append((entry, scope_file_str))
                 except Exception as e:
-                    print(f"Erreur résolution '{entry}' dans {scope_file}: {e}")
+                    log(f"Erreur résolution '{entry}' dans {scope_file_str}: {e}")
     return networks, ips_map
 
 # Vérifie un domaine ou une IP unique
+# Affiche détails et fichier source
+
 def single_check(target, networks, ips_map):
+
+    # On vérifie explicitement si la cible est une IP ou un domaine, sans supposer quoi que ce soit en cas d'échec de résolution
     try:
-        resolved_ips = socket.gethostbyname_ex(target)[2]
-    except socket.gaierror:
+        ipaddress.ip_address(target)
+        # Si aucune exception, c'est une IP
         resolved_ips = [target]
+    except ValueError:
+        # Ce n'est pas une IP, on tente de résoudre comme domaine
+        try:
+            resolved_ips = socket.gethostbyname_ex(target)[2]
+        except socket.gaierror:
+            resolved_ips = []
 
     # Collecte des correspondances
     matches = []
@@ -72,15 +89,19 @@ def single_check(target, networks, ips_map):
             for entry, fname in ips_map[ip]:
                 matches.append((ip, entry, fname))
 
+    # Avant d'afficher , on répond f"{RED}[-]{RESET} {target} : Aucune IP résolue."
+    if not matches:
+        log(f"{RED}[-]{RESET} {target} : Aucune IP résolue.")
+        return
     if matches:
         print(f"{GREEN}[+]{RESET} {target} résout vers:")
         for idx, (ip, entry, fname) in enumerate(matches):
             char = "├─" if idx < len(matches) - 1 else "└─"
-            print(f" {char} {ip} -> {entry} ({os.path.basename(fname)})")
+            log(f" {char} {ip} -> {entry} ({os.path.basename(fname)})")
     else:
         # Affiche toutes les IPs trouvées en rouge
         red_list = ", ".join([f"{RED}{ip}{RESET}" for ip in resolved_ips])
-        print(f"{RED}[-]{RESET} {target} : [{red_list}]")
+        log(f"{RED}[-]{RESET} {target} : [{red_list}]")
     return
 
 # Écrit les résultats dans un fichier (txt ou csv)
@@ -92,9 +113,10 @@ def write_output(filename, data, csv=False):
                 for ip, entry, fname in matches:
                     f.write(f"{domain},{ip},{entry},{os.path.basename(fname)}\n")
         else:
+            # On écrit le domaine unique par ligne
             for domain, matches in data.items():
                 ips_only = [ip for ip, _, _ in matches]
-                f.write(domain + ("," + ",".join(ips_only) if ips_only else "") + "\n")
+                f.write(domain+ "\n")
 
 
 def main():
@@ -110,9 +132,15 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Mode debug (logs détaillés)")
     parser.add_argument("-oT", "--output-txt", help="Sortie txt (domaines uniquement)")
     parser.add_argument("-oC", "--output-csv", help="Sortie csv (domaine,ip,entry,file)")
-    parser.add_argument('--version', action='version', version='Izinscope 1.4')
-    args = parser.parse_args()
+    parser.add_argument('--version', action='version', version='izinscope 0.4.0')
+    # stdout options for only domain --only-domain
+    parser.add_argument("-od",'--only-domain', action='store_true', help="Afficher uniquement les domaines dans la sortie")
 
+    
+
+    args = parser.parse_args()
+    global ONLY_DOMAIN
+    ONLY_DOMAIN = args.only_domain
     # Expansion des scopes: fichiers et dossiers
     scope_files = []
     for path in args.scope:
@@ -175,16 +203,31 @@ def main():
 
             prefix = f"{GREEN}[+]{RESET}" if matches_for_domain else f"{RED}[-]{RESET}"
             log(f"{prefix} {domain} : [{', '.join(colored_ips)}]", logfile)
-            if matches_for_domain:
-                inscope_results[domain] = matches_for_domain
 
+            # Affichage détaillé pour -d comme pour -i
+            if matches_for_domain:
+                for idx, (ip, entry, fname) in enumerate(matches_for_domain):
+                    char = "├─" if idx < len(matches_for_domain) - 1 else "└─"
+                    log(f" {char} {ip} -> {entry} ({os.path.basename(fname)})")
+                inscope_results[domain] = matches_for_domain
+            else:
+                # Affiche toutes les IPs trouvées en rouge
+                red_list = ", ".join([f"{RED}{ip}{RESET}" for ip in ips])
+                log(f"{RED}[-]{RESET} {domain} : [{red_list}]")
+
+    # Sortie CSV : domaine,ip,entry,file
     if args.output_csv:
         write_output(args.output_csv, inscope_results, csv=True)
         log(f"Fichier CSV '{args.output_csv}' créé.", logfile)
 
+    # Sortie TXT : domaines uniques
     if args.output_txt:
         write_output(args.output_txt, inscope_results, csv=False)
         log(f"Fichier TXT '{args.output_txt}' créé.", logfile)
+
+    if args.only_domain:
+        for domain, matches in inscope_results.items():
+            print(domain)
 
     if logfile:
         logfile.close()
