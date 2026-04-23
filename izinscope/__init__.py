@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import ipaddress
-import socket
 import datetime
-import sys
 import os
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
@@ -43,7 +41,7 @@ def resolve_domain(domain, resolver):
 # Charge un fichier de scope et renvoie:
 # - liste de tuples (network_obj, entry, filename)
 # - dict mapping ip -> list of (entry, filename)
-def load_scope(scope_file):
+def load_scope(scope_file, resolver):
     # Accept both `str` and `pathlib.Path` inputs.  Convert once to a plain
     # string so that internal data structures always contain the same type
     # (this helps comparisons in tests that expect a `str`).
@@ -59,26 +57,26 @@ def load_scope(scope_file):
                 net = ipaddress.ip_network(entry, strict=False)
                 networks.append((net, entry, scope_file_str))
             except ValueError:
-                try:
-                    resolved = socket.gethostbyname_ex(entry)[2]
-                    for ip in resolved:
-                        ips_map.setdefault(ip, []).append((entry, scope_file_str))
-                except Exception as e:
-                    log(f"Erreur résolution '{entry}' dans {scope_file_str}: {e}")
+                _, resolved = resolve_domain(entry, resolver)
+                if not resolved:
+                    log(f"Erreur résolution '{entry}' dans {scope_file_str}")
+                for ip in resolved:
+                    ips_map.setdefault(ip, []).append((entry, scope_file_str))
     return networks, ips_map
 
 # Vérifie un domaine ou une IP unique
 # Affiche détails et fichier source
 
-def single_check(target, networks, ips_map):
+def single_check(target, networks, ips_map, resolver, logfile=None):
     try:
         ipaddress.ip_address(target)
         resolved_ips = [target]
     except ValueError:
-        try:
-            resolved_ips = socket.gethostbyname_ex(target)[2]
-        except socket.gaierror:
-            resolved_ips = []
+        _, resolved_ips = resolve_domain(target, resolver)
+
+    if not resolved_ips:
+        log(f"{RED}[-]{RESET} {target} : Aucune IP résolue.", logfile)
+        return {}
 
     matches = []
     for ip in resolved_ips:
@@ -91,13 +89,14 @@ def single_check(target, networks, ips_map):
                 matches.append((ip, entry, fname))
 
     if not matches:
-        log(f"{RED}[-]{RESET} {target} : Aucune IP résolue.")
+        red_list = ", ".join(f"{RED}{ip}{RESET}" for ip in resolved_ips)
+        log(f"{RED}[-]{RESET} {target} : Hors scope [{red_list}]", logfile)
         return {}
 
-    log(f"{GREEN}[+]{RESET} {target} résout vers:")
+    log(f"{GREEN}[+]{RESET} {target} résout vers:", logfile)
     for idx, (ip, entry, fname) in enumerate(matches):
         char = "├─" if idx < len(matches) - 1 else "└─"
-        log(f" {char} {ip} -> {entry} ({os.path.basename(fname)})")
+        log(f" {char} {ip} -> {entry} ({os.path.basename(fname)})", logfile)
     return {target: matches}
 
 # Écrit les résultats dans un fichier (txt ou csv)
@@ -152,11 +151,15 @@ def main():
         else:
             scope_files.append(path)
 
+    resolver = dns.resolver.Resolver()
+    resolver.timeout = 3
+    resolver.lifetime = 3
+
     # Charger et cumuler tous les scopes
     allowed_networks = []
     allowed_ips_map = {}
     for scope_file in scope_files:
-        nets, ips = load_scope(scope_file)
+        nets, ips = load_scope(scope_file, resolver)
         allowed_networks.extend(nets)
         for ip, entries in ips.items():
             allowed_ips_map.setdefault(ip, []).extend(entries)
@@ -166,12 +169,8 @@ def main():
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         logfile = open(f"log_izinscope_{timestamp}.log", 'w', encoding='utf-8')
 
-    resolver = dns.resolver.Resolver()
-    resolver.timeout = 3
-    resolver.lifetime = 3
-
     if args.single_check:
-        inscope_results = single_check(args.single_check, allowed_networks, allowed_ips_map)
+        inscope_results = single_check(args.single_check, allowed_networks, allowed_ips_map, resolver, logfile)
     else:
         with open(args.domains_to_check, 'r', encoding='utf-8') as f:
             targets = [l.strip() for l in f if l.strip()]

@@ -75,11 +75,11 @@ def test_resolve_domain_no_aaaa() -> None:
 # load_scope
 # ---------------------------------------------------------------------------
 
-def test_load_scope_mixed_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_scope_mixed_entries(tmp_path: Path) -> None:
     """
     Mélange CIDR + domaine dans le fichier de scope.
 
-    On patch socket.gethostbyname_ex pour renvoyer une IP prédictible.
+    On injecte un _FakeResolver pour renvoyer une IP prédictible.
     """
     scope_file = tmp_path / "scope.txt"
     scope_file.write_text(textwrap.dedent("""\
@@ -87,14 +87,9 @@ def test_load_scope_mixed_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         example.org
     """))
 
-    def fake_gethostbyname_ex(host: str):  # noqa: D401
-        if host == "example.org":
-            return ("example.org", [], ["93.184.216.34"])
-        raise OSError  # n'est pas censé arriver dans ce test
+    fake = _FakeResolver({("example.org", "A"): ["93.184.216.34"]})
 
-    monkeypatch.setattr(izinscope.socket, "gethostbyname_ex", fake_gethostbyname_ex)
-
-    nets, ip_map = izinscope.load_scope(scope_file)
+    nets, ip_map = izinscope.load_scope(scope_file, fake)
 
     # 1) réseau CIDR correctement interprété
     cidrs = {str(n[0]) for n in nets}
@@ -103,6 +98,21 @@ def test_load_scope_mixed_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     # 2) domaine résolu stocké dans ip_map
     assert ip_map == {
         "93.184.216.34": [("example.org", str(scope_file))]
+    }
+
+
+def test_load_scope_aaaa_entry(tmp_path: Path) -> None:
+    """
+    Un domaine AAAA-only dans le scope doit être chargé (B8 : IPv6).
+    """
+    scope_file = tmp_path / "scope.txt"
+    scope_file.write_text("v6only.example\n")
+
+    fake = _FakeResolver({("v6only.example", "AAAA"): ["2001:db8::1"]})
+    _, ip_map = izinscope.load_scope(scope_file, fake)
+
+    assert ip_map == {
+        "2001:db8::1": [("v6only.example", str(scope_file))]
     }
 
 
@@ -117,30 +127,68 @@ def test_single_check_ip_match(capsys: pytest.CaptureFixture[str]) -> None:
     networks = [(ipaddress.ip_network("192.168.0.0/24"), "192.168.0.0/24", "scope.txt")]
     izinscope.ONLY_DOMAIN = False  # on veut que log() écrive sur stdout
 
-    izinscope.single_check("192.168.0.5", networks, ips_map={})
+    izinscope.single_check("192.168.0.5", networks, ips_map={}, resolver=None)
 
     out = capsys.readouterr().out
     assert "[+]" in out
     assert "192.168.0.5" in out
 
 
-def test_single_check_domain_no_match(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_single_check_domain_hors_scope(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """
-    Domaine résout hors scope -> préfixe [-] + 'Aucune IP résolue.'
+    Domaine résout, mais aucune IP in-scope -> message 'Hors scope' (B5).
     """
-    def fake_gethostbyname_ex(host: str):  # noqa: D401
-        return (host, [], ["8.8.8.8"])
-
-    monkeypatch.setattr(izinscope.socket, "gethostbyname_ex", fake_gethostbyname_ex)
+    fake = _FakeResolver({("nocontent.example", "A"): ["8.8.8.8"]})
     izinscope.ONLY_DOMAIN = False
 
-    izinscope.single_check("nocontent.example", networks=[], ips_map={})
+    izinscope.single_check(
+        "nocontent.example", networks=[], ips_map={}, resolver=fake
+    )
+
+    out = capsys.readouterr().out
+    assert "Hors scope" in out
+    assert "8.8.8.8" in out
+    assert "[-]" in out
+
+
+def test_single_check_domain_unresolvable(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Domaine qui ne résout vers rien -> 'Aucune IP résolue.'
+    """
+    fake = _FakeResolver({})
+    izinscope.ONLY_DOMAIN = False
+
+    izinscope.single_check(
+        "nxdomain.example", networks=[], ips_map={}, resolver=fake
+    )
 
     out = capsys.readouterr().out
     assert "Aucune IP résolue." in out
     assert "[-]" in out
+
+
+def test_single_check_logfile_receives_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """
+    Quand logfile est fourni, single_check y écrit aussi (B4).
+    """
+    networks = [(ipaddress.ip_network("192.168.0.0/24"), "192.168.0.0/24", "scope.txt")]
+    izinscope.ONLY_DOMAIN = False
+    log_path = tmp_path / "run.log"
+
+    with open(log_path, "w", encoding="utf-8") as fh:
+        izinscope.single_check(
+            "192.168.0.5", networks, ips_map={}, resolver=None, logfile=fh
+        )
+
+    content = log_path.read_text()
+    assert "192.168.0.5" in content
+    assert "résout vers" in content
 
 
 # ---------------------------------------------------------------------------
