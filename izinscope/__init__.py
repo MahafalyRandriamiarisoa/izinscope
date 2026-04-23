@@ -6,7 +6,13 @@ import datetime
 import sys
 import os
 from concurrent.futures import ThreadPoolExecutor
+from importlib.metadata import version as _pkg_version, PackageNotFoundError
 import dns.resolver
+
+try:
+    __version__ = _pkg_version("izinscope")
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -65,20 +71,15 @@ def load_scope(scope_file):
 # Affiche détails et fichier source
 
 def single_check(target, networks, ips_map):
-
-    # On vérifie explicitement si la cible est une IP ou un domaine, sans supposer quoi que ce soit en cas d'échec de résolution
     try:
         ipaddress.ip_address(target)
-        # Si aucune exception, c'est une IP
         resolved_ips = [target]
     except ValueError:
-        # Ce n'est pas une IP, on tente de résoudre comme domaine
         try:
             resolved_ips = socket.gethostbyname_ex(target)[2]
         except socket.gaierror:
             resolved_ips = []
 
-    # Collecte des correspondances
     matches = []
     for ip in resolved_ips:
         ip_obj = ipaddress.ip_address(ip)
@@ -89,20 +90,15 @@ def single_check(target, networks, ips_map):
             for entry, fname in ips_map[ip]:
                 matches.append((ip, entry, fname))
 
-    # Avant d'afficher , on répond f"{RED}[-]{RESET} {target} : Aucune IP résolue."
     if not matches:
         log(f"{RED}[-]{RESET} {target} : Aucune IP résolue.")
-        return
-    if matches:
-        print(f"{GREEN}[+]{RESET} {target} résout vers:")
-        for idx, (ip, entry, fname) in enumerate(matches):
-            char = "├─" if idx < len(matches) - 1 else "└─"
-            log(f" {char} {ip} -> {entry} ({os.path.basename(fname)})")
-    else:
-        # Affiche toutes les IPs trouvées en rouge
-        red_list = ", ".join([f"{RED}{ip}{RESET}" for ip in resolved_ips])
-        log(f"{RED}[-]{RESET} {target} : [{red_list}]")
-    return
+        return {}
+
+    log(f"{GREEN}[+]{RESET} {target} résout vers:")
+    for idx, (ip, entry, fname) in enumerate(matches):
+        char = "├─" if idx < len(matches) - 1 else "└─"
+        log(f" {char} {ip} -> {entry} ({os.path.basename(fname)})")
+    return {target: matches}
 
 # Écrit les résultats dans un fichier (txt ou csv)
 def write_output(filename, data, csv=False):
@@ -136,7 +132,7 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Mode debug (logs détaillés)")
     parser.add_argument("-oT", "--output-txt", help="Sortie txt (domaines uniquement)")
     parser.add_argument("-oC", "--output-csv", help="Sortie csv (domaine,ip,entry,file)")
-    parser.add_argument("-V",'--version', action='version', version='izinscope 0.4.0')
+    parser.add_argument("-V", "--version", action="version", version=f"izinscope {__version__}")
     # stdout options for only domain --only-domain
     parser.add_argument("-od",'--only-domain', action='store_true', help="Afficher uniquement les domaines dans la sortie")
 
@@ -175,49 +171,43 @@ def main():
     resolver.lifetime = 3
 
     if args.single_check:
-        single_check(args.single_check, allowed_networks, allowed_ips_map)
-        return
+        inscope_results = single_check(args.single_check, allowed_networks, allowed_ips_map)
+    else:
+        with open(args.domains_to_check, 'r', encoding='utf-8') as f:
+            targets = [l.strip() for l in f if l.strip()]
 
-    with open(args.domains_to_check, 'r', encoding='utf-8') as f:
-        targets = [l.strip() for l in f if l.strip()]
+        inscope_results = {}
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            for domain, ips in executor.map(lambda d: resolve_domain(d, resolver), targets):
+                if not ips:
+                    log(f"{RED}[-]{RESET} {domain} : Aucune IP résolue.", logfile)
+                    continue
 
-    inscope_results = {}
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        for domain, ips in executor.map(lambda d: resolve_domain(d, resolver), targets):
-            if not ips:
-                log(f"{RED}[-]{RESET} {domain} : Aucune IP résolue.", logfile)
-                continue
+                matches_for_domain = []
+                colored_ips = []
+                for ip in ips:
+                    ip_obj = ipaddress.ip_address(ip)
+                    descs = []
+                    for net, entry, fname in allowed_networks:
+                        if ip_obj in net:
+                            descs.append((ip, entry, fname))
+                    if ip in allowed_ips_map:
+                        for entry, fname in allowed_ips_map[ip]:
+                            descs.append((ip, entry, fname))
+                    if descs:
+                        colored_ips.append(f"{GREEN}{ip}{RESET}")
+                        matches_for_domain.extend(descs)
+                    else:
+                        colored_ips.append(f"{RED}{ip}{RESET}")
 
-            matches_for_domain = []
-            colored_ips = []
-            for ip in ips:
-                ip_obj = ipaddress.ip_address(ip)
-                descs = []
-                for net, entry, fname in allowed_networks:
-                    if ip_obj in net:
-                        descs.append((ip, entry, fname))
-                if ip in allowed_ips_map:
-                    for entry, fname in allowed_ips_map[ip]:
-                        descs.append((ip, entry, fname))
-                if descs:
-                    colored_ips.append(f"{GREEN}{ip}{RESET}")
-                    matches_for_domain.extend(descs)
-                else:
-                    colored_ips.append(f"{RED}{ip}{RESET}")
+                prefix = f"{GREEN}[+]{RESET}" if matches_for_domain else f"{RED}[-]{RESET}"
+                log(f"{prefix} {domain} : [{', '.join(colored_ips)}]", logfile)
 
-            prefix = f"{GREEN}[+]{RESET}" if matches_for_domain else f"{RED}[-]{RESET}"
-            log(f"{prefix} {domain} : [{', '.join(colored_ips)}]", logfile)
-
-            # Affichage détaillé pour -d comme pour -i
-            if matches_for_domain:
-                for idx, (ip, entry, fname) in enumerate(matches_for_domain):
-                    char = "├─" if idx < len(matches_for_domain) - 1 else "└─"
-                    log(f" {char} {ip} -> {entry} ({os.path.basename(fname)})")
-                inscope_results[domain] = matches_for_domain
-            else:
-                # Affiche toutes les IPs trouvées en rouge
-                red_list = ", ".join([f"{RED}{ip}{RESET}" for ip in ips])
-                log(f"{RED}[-]{RESET} {domain} : [{red_list}]")
+                if matches_for_domain:
+                    for idx, (ip, entry, fname) in enumerate(matches_for_domain):
+                        char = "├─" if idx < len(matches_for_domain) - 1 else "└─"
+                        log(f" {char} {ip} -> {entry} ({os.path.basename(fname)})")
+                    inscope_results[domain] = matches_for_domain
 
     # Sortie CSV : domaine,ip,entry,file
     if args.output_csv:
