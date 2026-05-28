@@ -3,12 +3,13 @@ Tests unitaires pour le module izinscope.
 
 Le réseau et le système de fichiers réels sont systématiquement
 mockés pour garantir des tests rapides, reproductibles et hors‑ligne.
-Les helpers DNS (_FakeResolver) et la fixture de reset de ONLY_DOMAIN
-vivent dans tests/conftest.py.
+Les helpers DNS (_FakeResolver) et la fixture de reset du logger vivent
+dans tests/conftest.py.
 """
 from __future__ import annotations
 
 import ipaddress
+import logging
 import textwrap
 from pathlib import Path
 
@@ -119,69 +120,56 @@ def test_load_scope_skips_comments(tmp_path: Path, fake_resolver) -> None:
 # single_check
 # ---------------------------------------------------------------------------
 
-def test_single_check_ip_match(capsys: pytest.CaptureFixture[str]) -> None:
+def test_single_check_ip_match(caplog) -> None:
     """
     La cible est une IP appartenant au scope -> sortie avec préfixe [+]
     """
     networks = [(ipaddress.ip_network("192.168.0.0/24"), "192.168.0.0/24", "scope.txt")]
 
-    izinscope.single_check("192.168.0.5", networks, ips_map={}, resolver=None)
+    with caplog.at_level(logging.INFO, logger="izinscope"):
+        result = izinscope.single_check(
+            "192.168.0.5", networks, ips_map={}, resolver=None
+        )
 
-    out = capsys.readouterr().out
-    assert "[+]" in out
-    assert "192.168.0.5" in out
+    assert "[+]" in caplog.text
+    assert "192.168.0.5" in caplog.text
+    # renvoie des objets Match (A3)
+    assert result["192.168.0.5"][0] == izinscope.Match(
+        "192.168.0.5", "192.168.0.0/24", "scope.txt"
+    )
 
 
-def test_single_check_domain_hors_scope(
-    fake_resolver, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_single_check_domain_hors_scope(fake_resolver, caplog) -> None:
     """
     Domaine résout, mais aucune IP in-scope -> message 'Hors scope' (B5).
     """
     fake = fake_resolver({("nocontent.example", "A"): ["8.8.8.8"]})
 
-    izinscope.single_check(
-        "nocontent.example", networks=[], ips_map={}, resolver=fake
-    )
+    with caplog.at_level(logging.INFO, logger="izinscope"):
+        result = izinscope.single_check(
+            "nocontent.example", networks=[], ips_map={}, resolver=fake
+        )
 
-    out = capsys.readouterr().out
-    assert "Hors scope" in out
-    assert "8.8.8.8" in out
-    assert "[-]" in out
+    assert result == {}
+    assert "Hors scope" in caplog.text
+    assert "8.8.8.8" in caplog.text
+    assert "[-]" in caplog.text
 
 
-def test_single_check_domain_unresolvable(
-    fake_resolver, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_single_check_domain_unresolvable(fake_resolver, caplog) -> None:
     """
     Domaine qui ne résout vers rien -> 'Aucune IP résolue.'
     """
     fake = fake_resolver({})
 
-    izinscope.single_check(
-        "nxdomain.example", networks=[], ips_map={}, resolver=fake
-    )
-
-    out = capsys.readouterr().out
-    assert "Aucune IP résolue." in out
-    assert "[-]" in out
-
-
-def test_single_check_logfile_receives_output(tmp_path: Path) -> None:
-    """
-    Quand logfile est fourni, single_check y écrit aussi (B4).
-    """
-    networks = [(ipaddress.ip_network("192.168.0.0/24"), "192.168.0.0/24", "scope.txt")]
-    log_path = tmp_path / "run.log"
-
-    with open(log_path, "w", encoding="utf-8") as fh:
-        izinscope.single_check(
-            "192.168.0.5", networks, ips_map={}, resolver=None, logfile=fh
+    with caplog.at_level(logging.INFO, logger="izinscope"):
+        result = izinscope.single_check(
+            "nxdomain.example", networks=[], ips_map={}, resolver=fake
         )
 
-    content = log_path.read_text()
-    assert "192.168.0.5" in content
-    assert "résout vers" in content
+    assert result == {}
+    assert "Aucune IP résolue." in caplog.text
+    assert "[-]" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +181,7 @@ def test_write_output_txt_and_csv(tmp_path: Path) -> None:
     TXT : un domaine par ligne (B10). CSV : 4 colonnes domain,ip,entry,file (B11).
     """
     data = {
-        "example.com": [("93.184.216.34", "entry", "scope.txt")]
+        "example.com": [izinscope.Match("93.184.216.34", "entry", "scope.txt")]
     }
     txt_file = tmp_path / "out.txt"
     csv_file = tmp_path / "out.csv"
@@ -218,8 +206,8 @@ def test_write_output_multiple_ips(tmp_path: Path) -> None:
     """
     data = {
         "example.net": [
-            ("1.1.1.1", "entry", "scope1.txt"),
-            ("2.2.2.2", "entry", "scope1.txt"),
+            izinscope.Match("1.1.1.1", "entry", "scope1.txt"),
+            izinscope.Match("2.2.2.2", "entry", "scope1.txt"),
         ]
     }
     txt_file = tmp_path / "out.txt"

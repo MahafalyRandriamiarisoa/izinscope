@@ -125,7 +125,7 @@ def test_cli_d_unresolved_domain(invoke, tmp_path, capsys) -> None:
 
 
 def test_cli_debug_creates_logfile(invoke, tmp_path, monkeypatch) -> None:
-    """B4 : --debug crée un fichier log non vide dans le CWD."""
+    """B4 : --debug crée un fichier log non vide, sans codes couleur ANSI (B14)."""
     monkeypatch.chdir(tmp_path)
     scope = _write_scope(tmp_path)
 
@@ -133,7 +133,10 @@ def test_cli_debug_creates_logfile(invoke, tmp_path, monkeypatch) -> None:
 
     logs = list(tmp_path.glob("log_izinscope_*.log"))
     assert len(logs) == 1
-    assert logs[0].stat().st_size > 0
+    content = logs[0].read_text()
+    assert content.strip()
+    assert "192.168.0.5" in content
+    assert "\x1b[" not in content
 
 
 def test_cli_scope_directory_expansion(invoke, tmp_path, capsys) -> None:

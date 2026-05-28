@@ -1,6 +1,7 @@
 """Fixtures partagées pour la suite de tests izinscope."""
 from __future__ import annotations
 
+import logging
 import sys
 
 import pytest
@@ -9,11 +10,20 @@ import izinscope
 
 
 @pytest.fixture(autouse=True)
-def _reset_only_domain():
-    """Isole le global ONLY_DOMAIN entre les tests (cf. B16)."""
-    izinscope.ONLY_DOMAIN = False
+def _reset_logger():
+    """Isole le logger 'izinscope' entre les tests (handlers/propagate/level)."""
+    logger = logging.getLogger("izinscope")
+    for handler in list(logger.handlers):
+        handler.close()
+    logger.handlers.clear()
+    logger.propagate = True
+    logger.setLevel(logging.NOTSET)
     yield
-    izinscope.ONLY_DOMAIN = False
+    for handler in list(logger.handlers):
+        handler.close()
+    logger.handlers.clear()
+    logger.propagate = True
+    logger.setLevel(logging.NOTSET)
 
 
 class _FakeRdata:
