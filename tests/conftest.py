@@ -1,4 +1,5 @@
 """Fixtures partagées pour la suite de tests izinscope."""
+
 from __future__ import annotations
 
 import logging
@@ -69,5 +70,6 @@ def invoke(monkeypatch, fake_resolver):
         monkeypatch.setattr(izinscope.dns.resolver, "Resolver", lambda: fake)
         monkeypatch.setattr(sys, "argv", ["izinscope", *argv])
         izinscope.main()
+        return fake
 
     return _invoke

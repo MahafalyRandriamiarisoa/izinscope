@@ -15,7 +15,7 @@ def load_scope(scope_file, resolver):
     scope_file_str = os.fspath(scope_file)
     networks = []
     ips_map = {}
-    with open(scope_file_str, 'r') as f:
+    with open(scope_file_str, "r") as f:
         for line in f:
             entry = line.split("#", 1)[0].strip()
             if not entry:

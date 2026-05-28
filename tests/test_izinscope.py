@@ -6,6 +6,7 @@ mockés pour garantir des tests rapides, reproductibles et hors‑ligne.
 Les helpers DNS (_FakeResolver) et la fixture de reset du logger vivent
 dans tests/conftest.py.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -21,6 +22,7 @@ import izinscope
 # ---------------------------------------------------------------------------
 # resolve_domain
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_domain_success(fake_resolver) -> None:
     """Le domaine retourne bien la liste des IP A et AAAA."""
@@ -49,9 +51,35 @@ def test_resolve_domain_no_aaaa(fake_resolver) -> None:
     assert ips == ["9.9.9.9"]
 
 
+def test_resolve_domain_handles_dns_exception() -> None:
+    """Une erreur DNS (timeout) est avalée sans lever, IP vide retournée (B15)."""
+    import dns.exception
+
+    class _Timeouter:
+        def resolve(self, domain, record):
+            raise dns.exception.Timeout()
+
+    domain, ips = izinscope.resolve_domain("slow.example", _Timeouter())
+
+    assert domain == "slow.example"
+    assert ips == []
+
+
+def test_resolve_domain_propagates_non_dns_errors() -> None:
+    """Une exception non-DNS n'est PAS avalée silencieusement (B15)."""
+
+    class _Boom:
+        def resolve(self, domain, record):
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        izinscope.resolve_domain("x.example", _Boom())
+
+
 # ---------------------------------------------------------------------------
 # load_scope
 # ---------------------------------------------------------------------------
+
 
 def test_load_scope_mixed_entries(tmp_path: Path, fake_resolver) -> None:
     """
@@ -60,10 +88,14 @@ def test_load_scope_mixed_entries(tmp_path: Path, fake_resolver) -> None:
     On injecte un _FakeResolver pour renvoyer une IP prédictible.
     """
     scope_file = tmp_path / "scope.txt"
-    scope_file.write_text(textwrap.dedent("""\
+    scope_file.write_text(
+        textwrap.dedent(
+            """\
         10.0.0.0/8
         example.org
-    """))
+    """
+        )
+    )
 
     fake = fake_resolver({("example.org", "A"): ["93.184.216.34"]})
 
@@ -74,9 +106,7 @@ def test_load_scope_mixed_entries(tmp_path: Path, fake_resolver) -> None:
     assert "10.0.0.0/8" in cidrs
 
     # 2) domaine résolu stocké dans ip_map
-    assert ip_map == {
-        "93.184.216.34": [("example.org", str(scope_file))]
-    }
+    assert ip_map == {"93.184.216.34": [("example.org", str(scope_file))]}
 
 
 def test_load_scope_aaaa_entry(tmp_path: Path, fake_resolver) -> None:
@@ -89,9 +119,7 @@ def test_load_scope_aaaa_entry(tmp_path: Path, fake_resolver) -> None:
     fake = fake_resolver({("v6only.example", "AAAA"): ["2001:db8::1"]})
     _, ip_map = izinscope.load_scope(scope_file, fake)
 
-    assert ip_map == {
-        "2001:db8::1": [("v6only.example", str(scope_file))]
-    }
+    assert ip_map == {"2001:db8::1": [("v6only.example", str(scope_file))]}
 
 
 def test_load_scope_skips_comments(tmp_path: Path, fake_resolver) -> None:
@@ -99,11 +127,15 @@ def test_load_scope_skips_comments(tmp_path: Path, fake_resolver) -> None:
     Lignes de commentaire complètes et commentaires en fin de ligne ignorés (B13).
     """
     scope_file = tmp_path / "scope.txt"
-    scope_file.write_text(textwrap.dedent("""\
+    scope_file.write_text(
+        textwrap.dedent(
+            """\
         # commentaire d'entête
         10.0.0.0/8
         192.168.0.1  # commentaire inline
-    """))
+    """
+        )
+    )
 
     fake = fake_resolver({})
     nets, ip_map = izinscope.load_scope(scope_file, fake)
@@ -119,6 +151,7 @@ def test_load_scope_skips_comments(tmp_path: Path, fake_resolver) -> None:
 # ---------------------------------------------------------------------------
 # single_check
 # ---------------------------------------------------------------------------
+
 
 def test_single_check_ip_match(caplog) -> None:
     """
@@ -176,13 +209,12 @@ def test_single_check_domain_unresolvable(fake_resolver, caplog) -> None:
 # write_output
 # ---------------------------------------------------------------------------
 
+
 def test_write_output_txt_and_csv(tmp_path: Path) -> None:
     """
     TXT : un domaine par ligne (B10). CSV : 4 colonnes domain,ip,entry,file (B11).
     """
-    data = {
-        "example.com": [izinscope.Match("93.184.216.34", "entry", "scope.txt")]
-    }
+    data = {"example.com": [izinscope.Match("93.184.216.34", "entry", "scope.txt")]}
     txt_file = tmp_path / "out.txt"
     csv_file = tmp_path / "out.csv"
 

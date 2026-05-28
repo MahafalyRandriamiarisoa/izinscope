@@ -5,12 +5,15 @@ Chaque test invoque main() via la fixture `invoke` (cf. conftest.py), qui
 patche sys.argv et dns.resolver.Resolver. Les bugs corrigés en P0/P1 ont
 ici une régression nommée pour empêcher leur réintroduction.
 """
+
 from __future__ import annotations
 
 from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+
+import izinscope
 
 
 def _write_scope(tmp_path: Path, content: str = "192.168.0.0/24\n") -> Path:
@@ -26,6 +29,27 @@ def test_cli_version_matches_package(invoke, capsys) -> None:
 
     assert exc.value.code == 0
     assert capsys.readouterr().out.strip() == f"izinscope {version('izinscope')}"
+
+
+def test_parser_timeout_default_and_custom() -> None:
+    """A4 : --timeout par défaut à 3 s, surchargeable."""
+    parser = izinscope.build_parser()
+
+    default_args = parser.parse_args(["-s", "x", "-i", "1.2.3.4"])
+    assert default_args.timeout == 3.0
+
+    custom_args = parser.parse_args(["-s", "x", "-i", "1.2.3.4", "--timeout", "7"])
+    assert custom_args.timeout == 7.0
+
+
+def test_cli_timeout_applied_to_resolver(invoke, tmp_path) -> None:
+    """A4 : la valeur --timeout est appliquée au resolver DNS."""
+    scope = _write_scope(tmp_path)
+
+    fake = invoke(["-s", str(scope), "-i", "192.168.0.5", "--timeout", "7"])
+
+    assert fake.timeout == 7.0
+    assert fake.lifetime == 7.0
 
 
 def test_cli_i_ip_match(invoke, tmp_path, capsys) -> None:
