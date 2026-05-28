@@ -3,6 +3,7 @@ import argparse
 import ipaddress
 import datetime
 import os
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
 import dns.resolver
@@ -50,7 +51,7 @@ def load_scope(scope_file, resolver):
     ips_map = {}
     with open(scope_file_str, 'r') as f:
         for line in f:
-            entry = line.strip()
+            entry = line.split("#", 1)[0].strip()
             if not entry:
                 continue
             try:
@@ -103,18 +104,12 @@ def single_check(target, networks, ips_map, resolver, logfile=None):
 def write_output(filename, data, csv=False):
     with open(filename, 'w', encoding='utf-8') as f:
         if csv:
-            # Format CSV : target,entry,file  (target = IP ou domaine)
-            f.write("target,entry,file\n")
-            for _domain, matches in data.items():
-                for ip, entry, fname in matches:
-                    # On choisit l'IP comme "target" car c'est elle qui matche réellement le scope.
-                    f.write(f"{ip},{entry},{os.path.basename(fname)}\n")
-        else:
-            # On écrit le domaine et/ou les ips uniques par ligne
+            f.write("domain,ip,entry,file\n")
             for domain, matches in data.items():
-                ips_only = [ip for ip, _, _ in matches]
-                for ip in ips_only:
-                    f.write(ip + "\n")
+                for ip, entry, fname in matches:
+                    f.write(f"{domain},{ip},{entry},{os.path.basename(fname)}\n")
+        else:
+            for domain in data:
                 f.write(domain + "\n")
 
 
@@ -130,7 +125,7 @@ def main():
     group.add_argument("-i", "--single-check", help="Domaine ou IP unique à vérifier")
     parser.add_argument("--debug", action="store_true", help="Mode debug (logs détaillés)")
     parser.add_argument("-oT", "--output-txt", help="Sortie txt (domaines uniquement)")
-    parser.add_argument("-oC", "--output-csv", help="Sortie csv (domaine,ip,entry,file)")
+    parser.add_argument("-oC", "--output-csv", help="Sortie csv (domain,ip,entry,file)")
     parser.add_argument("-V", "--version", action="version", version=f"izinscope {__version__}")
     # stdout options for only domain --only-domain
     parser.add_argument("-od",'--only-domain', action='store_true', help="Afficher uniquement les domaines dans la sortie")
@@ -140,14 +135,16 @@ def main():
     args = parser.parse_args()
     global ONLY_DOMAIN
     ONLY_DOMAIN = args.only_domain
-    # Expansion des scopes: fichiers et dossiers
+    # Expansion des scopes: fichiers et dossiers (récursif, fichiers cachés ignorés)
     scope_files = []
     for path in args.scope:
-        if os.path.isdir(path):
-            for entry in sorted(os.listdir(path)):
-                full = os.path.join(path, entry)
-                if os.path.isfile(full):
-                    scope_files.append(full)
+        p = Path(path)
+        if p.is_dir():
+            for entry in sorted(p.rglob("*")):
+                if entry.is_file() and not any(
+                    part.startswith(".") for part in entry.relative_to(p).parts
+                ):
+                    scope_files.append(str(entry))
         else:
             scope_files.append(path)
 

@@ -52,7 +52,7 @@ def test_cli_i_writes_output_files(invoke, tmp_path) -> None:
     assert csv.exists()
     csv_text = csv.read_text()
     assert "192.168.0.5" in csv_text
-    assert csv_text.splitlines()[0] == "target,entry,file"
+    assert csv_text.splitlines()[0] == "domain,ip,entry,file"
 
 
 def test_cli_i_od_prints_only_target(invoke, tmp_path, capsys) -> None:
@@ -148,3 +148,31 @@ def test_cli_scope_directory_expansion(invoke, tmp_path, capsys) -> None:
     out = capsys.readouterr().out
     assert "[+]" in out
     assert "10.0.0.0/8" in out
+
+
+def test_cli_scope_directory_recursive(invoke, tmp_path, capsys) -> None:
+    """B12 : les fichiers de scope dans un sous-dossier sont chargés."""
+    scope_dir = tmp_path / "scopes"
+    nested = scope_dir / "nested"
+    nested.mkdir(parents=True)
+    (nested / "b.txt").write_text("10.0.0.0/8\n")
+
+    invoke(["-s", str(scope_dir), "-i", "10.1.2.3"])
+
+    out = capsys.readouterr().out
+    assert "[+]" in out
+    assert "10.0.0.0/8" in out
+
+
+def test_cli_scope_directory_ignores_dotfiles(invoke, tmp_path, capsys) -> None:
+    """B12 : un fichier caché dans le dossier de scope n'est pas chargé."""
+    scope_dir = tmp_path / "scopes"
+    scope_dir.mkdir()
+    (scope_dir / "a.txt").write_text("192.168.0.0/24\n")
+    (scope_dir / ".secret.txt").write_text("10.0.0.0/8\n")
+
+    # 10.1.2.3 n'existe que dans le dotfile -> doit rester hors scope
+    invoke(["-s", str(scope_dir), "-i", "10.1.2.3"])
+
+    out = capsys.readouterr().out
+    assert "Hors scope" in out

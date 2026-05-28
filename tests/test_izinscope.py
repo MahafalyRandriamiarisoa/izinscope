@@ -93,6 +93,28 @@ def test_load_scope_aaaa_entry(tmp_path: Path, fake_resolver) -> None:
     }
 
 
+def test_load_scope_skips_comments(tmp_path: Path, fake_resolver) -> None:
+    """
+    Lignes de commentaire complètes et commentaires en fin de ligne ignorés (B13).
+    """
+    scope_file = tmp_path / "scope.txt"
+    scope_file.write_text(textwrap.dedent("""\
+        # commentaire d'entête
+        10.0.0.0/8
+        192.168.0.1  # commentaire inline
+    """))
+
+    fake = fake_resolver({})
+    nets, ip_map = izinscope.load_scope(scope_file, fake)
+
+    cidrs = {str(n[0]) for n in nets}
+    assert "10.0.0.0/8" in cidrs
+    # le commentaire inline est tronqué, l'IP reste interprétée
+    assert "192.168.0.1/32" in cidrs
+    # le commentaire d'entête ne crée aucune entrée
+    assert ip_map == {}
+
+
 # ---------------------------------------------------------------------------
 # single_check
 # ---------------------------------------------------------------------------
@@ -165,13 +187,10 @@ def test_single_check_logfile_receives_output(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # write_output
 # ---------------------------------------------------------------------------
-# NOTE: ces deux tests figent volontairement le comportement actuel (B10 format
-# TXT, B11 header CSV). Ils seront réécrits dans la PR P2 qui corrige B10/B11.
 
 def test_write_output_txt_and_csv(tmp_path: Path) -> None:
     """
-    Vérifie la génération correcte des fichiers TXT et CSV (3 colonnes)
-    pour un domaine avec une unique IP.
+    TXT : un domaine par ligne (B10). CSV : 4 colonnes domain,ip,entry,file (B11).
     """
     data = {
         "example.com": [("93.184.216.34", "entry", "scope.txt")]
@@ -182,20 +201,20 @@ def test_write_output_txt_and_csv(tmp_path: Path) -> None:
     izinscope.write_output(txt_file, data, csv=False)
     izinscope.write_output(csv_file, data, csv=True)
 
-    # TXT : l'IP puis le domaine
-    assert txt_file.read_text().strip() == "93.184.216.34\nexample.com"
+    # TXT : un domaine par ligne, sans les IP
+    assert txt_file.read_text().strip() == "example.com"
 
-    # CSV : entête + ligne détaillée (3 colonnes)
+    # CSV : entête 4 colonnes + ligne détaillée
     csv_lines = csv_file.read_text().splitlines()
     assert csv_lines == [
-        "target,entry,file",
-        "93.184.216.34,entry,scope.txt",
+        "domain,ip,entry,file",
+        "example.com,93.184.216.34,entry,scope.txt",
     ]
 
 
 def test_write_output_multiple_ips(tmp_path: Path) -> None:
     """
-    Vérifie la génération correcte des fichiers TXT et CSV pour un domaine avec plusieurs IP.
+    Plusieurs IP pour un domaine : une seule ligne TXT (B10), une ligne CSV par IP.
     """
     data = {
         "example.net": [
@@ -206,7 +225,7 @@ def test_write_output_multiple_ips(tmp_path: Path) -> None:
     txt_file = tmp_path / "out.txt"
     izinscope.write_output(txt_file, data, csv=False)
 
-    assert txt_file.read_text().strip() == "1.1.1.1\n2.2.2.2\nexample.net"
+    assert txt_file.read_text().strip() == "example.net"
 
     # CSV
     csv_file = tmp_path / "out.csv"
@@ -214,7 +233,7 @@ def test_write_output_multiple_ips(tmp_path: Path) -> None:
 
     csv_lines = csv_file.read_text().splitlines()
     assert csv_lines == [
-        "target,entry,file",
-        "1.1.1.1,entry,scope1.txt",
-        "2.2.2.2,entry,scope1.txt",
+        "domain,ip,entry,file",
+        "example.net,1.1.1.1,entry,scope1.txt",
+        "example.net,2.2.2.2,entry,scope1.txt",
     ]

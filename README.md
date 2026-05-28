@@ -59,7 +59,7 @@ izinscope -s scope.txt -d domains.txt --debug -oT out.txt -oC out.csv
 - `-d, --domains-to-check` : Fichier listant les domaines à vérifier.
 - `--debug` : Active un mode de logs détaillés (fichier log).
 - `-oT, --output-txt` : Nom du fichier de sortie TXT (un domaine par ligne).
-- `-oC, --output-csv` : Nom du fichier de sortie CSV (domaine,ip,ip,...).
+- `-oC, --output-csv` : Nom du fichier de sortie CSV (colonnes : `domain,ip,entry,file`).
 
 ### Options supplémentaires
 
