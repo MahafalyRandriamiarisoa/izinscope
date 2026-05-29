@@ -11,7 +11,11 @@ def match_ips(ips, networks, ips_map):
     """Retourne les Match des IP données contre le scope (networks + ips_map)."""
     matches = []
     for ip in ips:
-        ip_obj = ipaddress.ip_address(ip)
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+        except ValueError:
+            logger.warning(f"IP invalide ignorée : {ip}")
+            continue
         for net, entry, fname in networks:
             if ip_obj in net:
                 matches.append(Match(ip, entry, fname))

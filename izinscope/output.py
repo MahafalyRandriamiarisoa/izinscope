@@ -1,15 +1,21 @@
+import csv as _csv
 import os
 
 
 def write_output(filename, data, csv=False):
-    """Écrit {domain: [Match, ...]} en TXT (1 domaine/ligne) ou CSV (4 colonnes)."""
-    with open(filename, "w", encoding="utf-8") as f:
+    """Écrit {domain: [Match, ...]} en TXT (1 domaine/ligne) ou CSV (4 colonnes).
+
+    Le CSV passe par csv.writer : les champs contenant une virgule (chemins,
+    entrées) sont échappés au lieu de décaler les colonnes.
+    """
+    with open(filename, "w", encoding="utf-8", newline="") as f:
         if csv:
-            f.write("domain,ip,entry,file\n")
+            writer = _csv.writer(f)
+            writer.writerow(["domain", "ip", "entry", "file"])
             for domain, matches in data.items():
                 for m in matches:
-                    f.write(
-                        f"{domain},{m.ip},{m.entry},{os.path.basename(m.source_file)}\n"
+                    writer.writerow(
+                        [domain, m.ip, m.entry, os.path.basename(m.source_file)]
                     )
         else:
             for domain in data:

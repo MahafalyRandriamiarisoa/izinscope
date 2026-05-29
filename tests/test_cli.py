@@ -203,3 +203,90 @@ def test_cli_scope_directory_ignores_dotfiles(invoke, tmp_path, capsys) -> None:
 
     out = capsys.readouterr().out
     assert "Hors scope" in out
+
+
+# ---------------------------------------------------------------------------
+# Couverture additionnelle : multi -s, IPv6, -od sans match, -d filtré, sorties vides
+# ---------------------------------------------------------------------------
+
+
+def test_cli_multiple_scope_files_accumulate(invoke, tmp_path, capsys) -> None:
+    """Deux -s cumulent leurs scopes : une cible couverte par le second matche."""
+    s1 = tmp_path / "s1.txt"
+    s1.write_text("192.168.0.0/24\n")
+    s2 = tmp_path / "s2.txt"
+    s2.write_text("10.0.0.0/8\n")
+
+    invoke(["-s", str(s1), "-s", str(s2), "-i", "10.1.2.3"])
+
+    out = capsys.readouterr().out
+    assert "[+]" in out
+    assert "10.0.0.0/8" in out
+
+
+def test_cli_i_ipv6_target_match(invoke, tmp_path, capsys) -> None:
+    """-i avec une IPv6 nue est reconnue comme IP et matchée contre un CIDR IPv6."""
+    scope = _write_scope(tmp_path, "2001:db8::/32\n")
+
+    invoke(["-s", str(scope), "-i", "2001:db8::1"])
+
+    out = capsys.readouterr().out
+    assert "[+]" in out
+    assert "2001:db8::/32" in out
+
+
+def test_cli_i_od_out_of_scope_prints_nothing(invoke, tmp_path, capsys) -> None:
+    """-od + cible hors scope : rien sur stdout (boucle vide, logs coupés)."""
+    scope = _write_scope(tmp_path)
+
+    invoke(["-s", str(scope), "-i", "8.8.8.8", "-od"])
+
+    assert capsys.readouterr().out == ""
+
+
+def test_cli_d_skips_blank_lines(invoke, tmp_path, capsys) -> None:
+    """Le fichier -d ignore les lignes vides/blanches sans tenter de les résoudre."""
+    scope = _write_scope(tmp_path)
+    doms = tmp_path / "d.txt"
+    doms.write_text("\n  \nin.example\n\n")
+
+    invoke(["-s", str(scope), "-d", str(doms)], {("in.example", "A"): ["192.168.0.5"]})
+
+    out = capsys.readouterr().out
+    assert "in.example" in out
+    assert "Aucune IP résolue." not in out
+
+
+def test_cli_output_files_created_when_empty(invoke, tmp_path) -> None:
+    """Sortie vide : -oT crée un fichier vide, -oC un fichier header-seul."""
+    scope = _write_scope(tmp_path)
+    txt = tmp_path / "out.txt"
+    csv = tmp_path / "out.csv"
+
+    invoke(["-s", str(scope), "-i", "8.8.8.8", "-oT", str(txt), "-oC", str(csv)])
+
+    assert txt.read_text() == ""
+    assert csv.read_text().splitlines() == ["domain,ip,entry,file"]
+
+
+# ---------------------------------------------------------------------------
+# Tests-bugs ROUGES : fichiers d'entrée manquants -> sortie propre, pas de traceback
+# ---------------------------------------------------------------------------
+
+
+def test_cli_missing_scope_file_exits_2(invoke, tmp_path) -> None:
+    """BUG #2 (ROUGE) : -s vers un fichier inexistant -> SystemExit(2), pas de traceback."""
+    with pytest.raises(SystemExit) as exc:
+        invoke(["-s", str(tmp_path / "nope.txt"), "-i", "1.2.3.4"])
+
+    assert exc.value.code == 2
+
+
+def test_cli_missing_domains_file_exits_2(invoke, tmp_path) -> None:
+    """BUG #2 (ROUGE) : -d vers un fichier inexistant -> SystemExit(2), pas de traceback."""
+    scope = _write_scope(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        invoke(["-s", str(scope), "-d", str(tmp_path / "nope.txt")])
+
+    assert exc.value.code == 2

@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 import dns.resolver
 
@@ -55,7 +56,11 @@ def main():
     allowed_networks = []
     allowed_ips_map = {}
     for scope_file in scope_files:
-        nets, ips = load_scope(scope_file, resolver)
+        try:
+            nets, ips = load_scope(scope_file, resolver)
+        except FileNotFoundError:
+            logger.error(f"Fichier de scope introuvable : {scope_file}")
+            sys.exit(2)
         allowed_networks.extend(nets)
         for ip, entries in ips.items():
             allowed_ips_map.setdefault(ip, []).extend(entries)
@@ -65,8 +70,12 @@ def main():
             args.single_check, allowed_networks, allowed_ips_map, resolver
         )
     else:
-        with open(args.domains_to_check, "r", encoding="utf-8") as f:
-            targets = [l.strip() for l in f if l.strip()]
+        try:
+            with open(args.domains_to_check, "r", encoding="utf-8") as f:
+                targets = [l.strip() for l in f if l.strip()]
+        except FileNotFoundError:
+            logger.error(f"Fichier de domaines introuvable : {args.domains_to_check}")
+            sys.exit(2)
         inscope_results = check_domains(
             targets, allowed_networks, allowed_ips_map, resolver
         )
